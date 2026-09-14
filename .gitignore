@@ -1,0 +1,9 @@
+## .NET build artifacts (scoped to mock-api/, not repo-wide)
+bin/
+obj/
+*.user
+
+## Test results
+[Tt]est[Rr]esult*/
+coverage*.json
+coverage*.xml
