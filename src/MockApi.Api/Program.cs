@@ -45,6 +45,8 @@ app.MapGet(ApiRoutes.ProductById, async (int id, IProductsService service, Cance
 })
     .WithName("GetProductById");
 
+
+// Random change
 app.MapPost(ApiRoutes.ProductsBase, async ([FromBody] CreateProductRequest request, IProductsService service, CancellationToken cancellationToken) =>
 {
     var result = await service.CreateAsync(request, cancellationToken);
