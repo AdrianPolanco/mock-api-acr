@@ -38,6 +38,7 @@ app.MapGet(ApiRoutes.ProductsBase, async (IProductsService service, Cancellation
     Results.Ok(await service.GetAllAsync(cancellationToken)))
     .WithName("GetProducts");
 
+// Just another change
 app.MapGet(ApiRoutes.ProductById, async (int id, IProductsService service, CancellationToken cancellationToken) =>
 {
     var result = await service.GetByIdAsync(id, cancellationToken);
