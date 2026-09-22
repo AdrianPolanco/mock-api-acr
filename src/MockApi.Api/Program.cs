@@ -1,3 +1,4 @@
+using Dapr.Client;
 using MockApi.Api.Clients;
 using MockApi.Api.Common;
 using MockApi.Api.Contracts;
@@ -7,7 +8,6 @@ using MockApi.Api.Options;
 using MockApi.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,12 +20,10 @@ builder.Services
     .BindConfiguration(ReviewsApiOptions.SectionName)
     .ValidateOnStart();
 
-builder.Services.AddHttpClient<IReviewsClient, ReviewsClient>((sp, client) =>
-{
-    var options = sp.GetRequiredService<IOptionsMonitor<ReviewsApiOptions>>().CurrentValue;
-    client.BaseAddress = options.BaseUrl;
-})
-    .AddStandardResilienceHandler();
+// DaprClient talks to this app's Dapr sidecar (localhost, DAPR_HTTP_PORT/DAPR_GRPC_PORT
+// env vars set by the Dapr runtime); the sidecar resolves mock-reviews-api by app id.
+builder.Services.AddDaprClient();
+builder.Services.AddScoped<IReviewsClient, ReviewsClient>();
 
 var app = builder.Build();
 

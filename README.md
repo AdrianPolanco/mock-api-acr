@@ -21,13 +21,13 @@ mock-api-acr/
 │   ├── Contracts/ProductDto.cs — ProductDto, CreateProductRequest, UpdateProductRequest
 │   ├── Contracts/ReviewContracts.cs — ReviewDto, ProductReviewsDto, ProductWithReviewsDto
 │   ├── Services/                — IProductsService / ProductsService (lógica de negocio)
-│   ├── Clients/                  — IReviewsClient / ReviewsClient (typed HttpClient hacia mock-reviews-api)
-│   ├── Options/ReviewsApiOptions.cs — BaseUrl del servicio interno, vía IOptionsMonitor<T>
+│   ├── Clients/                  — IReviewsClient / ReviewsClient (Dapr service invocation hacia mock-reviews-api)
+│   ├── Options/ReviewsApiOptions.cs — AppId de Dapr del servicio interno, vía IOptionsMonitor<T>
 │   ├── Common/                  — Result<T>, rutas y mensajes como constantes
 │   └── Dockerfile               — build multi-stage
 └── tests/MockApi.Tests/
     ├── ProductsServiceTests.cs — xUnit + FluentAssertions, EF Core InMemory
-    └── ReviewsClientTests.cs   — xUnit + FluentAssertions, HttpMessageHandler falso
+    └── ReviewsClientTests.cs   — xUnit + FluentAssertions, cubre ReviewsClient.MapResponseAsync (ver nota abajo)
 ```
 
 ## Endpoints
@@ -72,29 +72,42 @@ curl http://localhost:8080/health
 - **In-memory, no persistente**: intencional — es un artefacto de práctica de contenerización/despliegue, no una app productiva. Cada reinicio del proceso pierde los datos sembrados.
 - Convenciones: primary constructors, namespaces file-scoped, records para DTOs, `Result<T>` en vez de excepciones para flujo de control, `CancellationToken` propagado en toda la cadena, constantes en vez de strings mágicos (`Common/ApiRoutes`, `Common/ErrorMessages`).
 - `Program.cs` expone `public partial class Program` al final para permitir tests de integración con `WebApplicationFactory<Program>` más adelante si se necesitan (hoy los tests son unitarios contra `ProductsService`, no de integración).
+- `ReviewsClient` habla con el sidecar de Dapr por gRPC, no por el pipeline de `HttpMessageHandler` de .NET, así que no es fakeable con un handler en memoria. `ReviewsClientTests.cs` prueba directamente `ReviewsClient.MapResponseAsync` (la lógica de mapear la respuesta a `Result<T>`), dejando el transporte del sidecar sin cubrir por test unitario — para probarlo end-to-end hace falta un sidecar real (Dapr CLI local o desplegado en ACA).
 
-## Integración con mock-reviews-api
+## Integración con mock-reviews-api (Dapr service invocation)
 
-`mock-api-acr` llama a [`mock-reviews-api`](https://github.com/AdrianPolanco/mock-reviews-api) — un segundo servicio dummy pensado para desplegarse en el **mismo environment de Azure Container Apps** — para practicar comunicación service-to-service dentro del environment:
+`mock-api-acr` llama a [`mock-reviews-api`](https://github.com/AdrianPolanco/mock-reviews-api) — un segundo servicio dummy pensado para desplegarse en el **mismo environment de Azure Container Apps** — usando el **service invocation building block de Dapr** (ACA trae Dapr integrado, no hay que instalar nada aparte):
 
-- **`mock-api-acr`** se despliega con `--ingress external` (alcanzable desde internet).
-- **`mock-reviews-api`** se despliega con `--ingress internal` (solo alcanzable desde otras Container Apps del mismo environment).
+- **`mock-api-acr`** se despliega con `--ingress external` (alcanzable desde internet) y `--enable-dapr --dapr-app-id mock-api-acr --dapr-app-port 8080`.
+- **`mock-reviews-api`** se despliega con `--ingress internal` (solo alcanzable desde otras Container Apps del mismo environment) y `--enable-dapr --dapr-app-id mock-reviews-api --dapr-app-port 8080`.
 
-El endpoint `GET /api/products/{id}/reviews` obtiene el producto localmente y llama a `mock-reviews-api` vía un `HttpClient` tipado (`Clients/ReviewsClient.cs`) con Polly v8 (`AddStandardResilienceHandler`). La URL base se configura con `IOptionsMonitor<ReviewsApiOptions>` (sección `ReviewsApi:BaseUrl` en `appsettings.json`, o la variable de entorno `ReviewsApi__BaseUrl` en Container Apps).
+El endpoint `GET /api/products/{id}/reviews` obtiene el producto localmente y llama a `mock-reviews-api` a través de `Clients/ReviewsClient.cs`, que usa `DaprClient.CreateInvokableHttpClient(appId)` (SDK `Dapr.Client`/`Dapr.AspNetCore`). La petición **no** va a una URL/DNS del otro servicio — va al sidecar de Dapr de `mock-api-acr` (`localhost:{DAPR_HTTP_PORT}`), que la reenvía al sidecar de `mock-reviews-api` por su `app-id`. El `app-id` de destino se configura con `IOptionsMonitor<ReviewsApiOptions>` (sección `ReviewsApi:AppId` en `appsettings.json`, o la variable de entorno `ReviewsApi__AppId`).
+
+Errores de red/sidecar (`HttpRequestException`) y respuestas no exitosas del servicio de reseñas se traducen a `Result.Failure` → el endpoint responde **503**; producto inexistente → **404**.
 
 ```bash
-# Local: levantar mock-reviews-api en otra terminal (puerto 5200) y luego
-dotnet run --project src/MockApi.Api
+# Local: requiere el Dapr CLI (`dapr init`). En dos terminales:
+dapr run --app-id mock-reviews-api --app-port 8080 --dapr-http-port 3501 -- dotnet run --project ../mock-reviews-api/src/MockReviewsApi.Api
+dapr run --app-id mock-api-acr --app-port 8080 --dapr-http-port 3500 -- dotnet run --project src/MockApi.Api
+
 curl http://localhost:5154/api/products/1/reviews
 ```
 
 ```bash
-# Azure Container Apps: apuntar mock-api-acr al FQDN interno de mock-reviews-api
-az containerapp update -n mock-api-acr -g <rg> \
-  --set-env-vars ReviewsApi__BaseUrl=https://<mock-reviews-api-fqdn-interno>
+# Azure Container Apps: habilitar Dapr en ambas Container Apps al crearlas
+az containerapp create -n mock-reviews-api -g <rg> --environment <env> \
+  --image <acr>.azurecr.io/mock-reviews-api:v1 --target-port 8080 --ingress internal \
+  --enable-dapr --dapr-app-id mock-reviews-api --dapr-app-port 8080
+
+az containerapp create -n mock-api-acr -g <rg> --environment <env> \
+  --image <acr>.azurecr.io/mock-api-acr:v1 --target-port 8080 --ingress external \
+  --enable-dapr --dapr-app-id mock-api-acr --dapr-app-port 8080 \
+  --set-env-vars ReviewsApi__AppId=mock-reviews-api
 ```
 
-Ver el README de `mock-reviews-api` para los comandos completos de despliegue con ingress `internal`.
+No hace falta apuntar `mock-api-acr` a ningún FQDN de `mock-reviews-api` — Dapr resuelve por `app-id` dentro del environment. `--ingress internal` en `mock-reviews-api` sigue siendo útil para poder probarlo de forma aislada (sin pasar por Dapr) si hace falta depurar.
+
+Ver el README de `mock-reviews-api` para más detalle.
 
 ## Relación con el repo de estudio AI-200
 

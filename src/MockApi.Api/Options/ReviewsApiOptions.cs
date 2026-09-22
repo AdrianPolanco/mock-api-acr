@@ -4,5 +4,9 @@ public class ReviewsApiOptions
 {
     public const string SectionName = "ReviewsApi";
 
-    public required Uri BaseUrl { get; set; }
+    /// <summary>
+    /// The Dapr app id of mock-reviews-api, as registered with --dapr-app-id.
+    /// Requests are routed to it through this app's Dapr sidecar, not by URL/DNS.
+    /// </summary>
+    public required string AppId { get; set; }
 }
