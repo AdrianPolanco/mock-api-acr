@@ -1,7 +1,10 @@
+using Dapr.Client;
+using MockApi.Api.Clients;
 using MockApi.Api.Common;
 using MockApi.Api.Contracts;
 using MockApi.Api.Data;
 using MockApi.Api.Entities;
+using MockApi.Api.Options;
 using MockApi.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,6 +14,16 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
 builder.Services.AddDbContext<MockApiDbContext>(options => options.UseInMemoryDatabase("MockApiDb"));
 builder.Services.AddScoped<IProductsService, ProductsService>();
+
+builder.Services
+    .AddOptions<ReviewsApiOptions>()
+    .BindConfiguration(ReviewsApiOptions.SectionName)
+    .ValidateOnStart();
+
+// DaprClient talks to this app's Dapr sidecar (localhost, DAPR_HTTP_PORT/DAPR_GRPC_PORT
+// env vars set by the Dapr runtime); the sidecar resolves mock-reviews-api by app id.
+builder.Services.AddDaprClient();
+builder.Services.AddScoped<IReviewsClient, ReviewsClient>();
 
 var app = builder.Build();
 
@@ -70,6 +83,26 @@ app.MapDelete(ApiRoutes.ProductById, async (int id, IProductsService service, Ca
     return result.IsSuccess ? Results.NoContent() : Results.NotFound(new { error = result.Error });
 })
     .WithName("DeleteProduct");
+
+// Calls the internal-ingress mock-reviews-api service to demonstrate
+// service-to-service communication within the same Container Apps environment.
+app.MapGet(ApiRoutes.ProductReviews, async (int id, IProductsService productsService, IReviewsClient reviewsClient, CancellationToken cancellationToken) =>
+{
+    var productResult = await productsService.GetByIdAsync(id, cancellationToken);
+    if (!productResult.IsSuccess)
+    {
+        return Results.NotFound(new { error = productResult.Error });
+    }
+
+    var reviewsResult = await reviewsClient.GetProductReviewsAsync(id, cancellationToken);
+    if (!reviewsResult.IsSuccess)
+    {
+        return Results.Json(new { error = reviewsResult.Error }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    return Results.Ok(new ProductWithReviewsDto(productResult.Value!, reviewsResult.Value!));
+})
+    .WithName("GetProductWithReviews");
 
 app.Run();
 
