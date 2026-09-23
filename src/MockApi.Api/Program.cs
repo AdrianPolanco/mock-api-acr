@@ -45,7 +45,7 @@ using (var scope = app.Services.CreateScope())
     dbContext.SaveChanges();
 }
 
-app.MapGet(ApiRoutes.Health, () => Results.Ok(new { status = "Healthy" }));
+app.MapGet(ApiRoutes.Health, () => Results.Ok(new { status = "Healthy", version = AppInfo.Version }));
 
 app.MapGet(ApiRoutes.ProductsBase, async (IProductsService service, CancellationToken cancellationToken) =>
     Results.Ok(await service.GetAllAsync(cancellationToken)))
