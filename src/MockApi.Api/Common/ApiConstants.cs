@@ -14,3 +14,8 @@ public static class ErrorMessages
     public const string NameRequired = "Name is required.";
     public const string ReviewsServiceUnavailable = "The reviews service is currently unavailable.";
 }
+
+public static class AppInfo
+{
+    public const string Version = "v2";
+}
